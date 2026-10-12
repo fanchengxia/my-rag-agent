@@ -1,69 +1,146 @@
-import Image from "next/image";
+"use client";
+import { useState, useRef, useEffect, type KeyboardEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent } from "@/components/ui/card";
+import { Alert } from "@/components/ui/alert";
 
-export default function Home() {
+type MessageItem = {
+  role: "user" | "ai";
+  content: string;
+};
+
+export default function RagAgentPage() {
+  const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [inputText, setInputText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [conversationId, setConversationId] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 自动滚动到底部
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const sendMessage = async () => {
+    if (!inputText.trim() || loading) return;
+    setErrorMsg("");
+
+    const userMsg: MessageItem = { role: "user", content: inputText.trim() };
+    setMessages((prev) => [...prev, userMsg]);
+    setInputText("");
+    setLoading(true);
+
+    // 追加空 AI 消息，逐步填充流内容
+    setMessages((prev) => [...prev, { role: "ai", content: "" }]);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: userMsg.content,
+          conversationId,
+        }),
+      });
+
+      if (!res.ok || !res.body) throw new Error("请求异常");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let aiContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // stream: true 处理多字节 UTF-8（中文）跨 chunk 被截断导致的乱码
+        buffer += decoder.decode(value, { stream: true });
+
+        // 按换行拆行；最后一段可能是不完整的行，留到下一轮继续拼接
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const json = JSON.parse(line);
+            if (json.answer) {
+              aiContent += json.answer;
+              setMessages((prev) => {
+                const arr = [...prev];
+                arr[arr.length - 1] = { role: "ai", content: aiContent };
+                return arr;
+              });
+            }
+            // 保存会话 id，用于多轮对话上下文记忆
+            if (json.conversation_id && !conversationId) {
+              setConversationId(json.conversation_id);
+            }
+          } catch {
+            // 忽略无法解析的片段
+          }
+        }
+      }
+    } catch {
+      setErrorMsg("网络异常，请求失败，请重试");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="max-w-3xl mx-auto p-4 h-screen flex flex-col">
+      <h1 className="text-xl font-bold mb-4 text-center">Web知识库RAG-Agent Demo</h1>
+
+      <Card className="flex-1 overflow-hidden flex flex-col">
+        <CardContent className="flex-1 overflow-auto p-4" ref={scrollRef}>
+          {messages.length === 0 && (
+            <div className="text-gray-400 text-center mt-20">请输入问题，基于知识库进行问答</div>
+          )}
+          {messages.map((msg, idx) => (
+            <div key={idx} className={`mb-3 ${msg.role === "user" ? "text-right" : "text-left"}`}>
+              <div
+                className={`inline-block px-3 py-2 rounded-lg max-w-[85%] whitespace-pre-wrap
+                ${msg.role === "user" ? "bg-blue-500 text-white" : "bg-gray-100 text-black"}`}
+              >
+                {msg.content || (loading && idx === messages.length - 1 ? "思考中……" : "")}
+              </div>
+            </div>
+          ))}
+          {errorMsg && (
+            <Alert variant="destructive" className="my-2">
+              {errorMsg}
+            </Alert>
+          )}
+          {messages.some((m) => m.role === "ai") && (
+            <div className="text-xs text-orange-500 mt-2">⚠️ AI生成内容存在幻觉风险，请人工核实信息</div>
+          )}
+        </CardContent>
+
+        <div className="p-3 border-t flex gap-2">
+          <Textarea
+            placeholder="输入你的问题..."
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className="flex-1 resize-none"
+          />
+          <Button onClick={sendMessage} disabled={loading}>
+            {loading ? "发送中" : "发送"}
+          </Button>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      </Card>
     </div>
   );
 }
