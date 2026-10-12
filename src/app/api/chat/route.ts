@@ -4,10 +4,9 @@ export async function POST(req: Request) {
   const { query, conversationId } = await req.json();
 
   const DIFY_API_KEY = process.env.DIFY_API_KEY;
-  const DIFY_APP_ID = process.env.DIFY_APP_ID;
 
-  if (!DIFY_API_KEY || !DIFY_APP_ID) {
-    return Response.json({ error: "环境变量未配置" }, { status: 500 });
+  if (!DIFY_API_KEY) {
+    return Response.json({ error: "环境变量未配置，请设置 DIFY_API_KEY" }, { status: 500 });
   }
 
   const difyBody = {
