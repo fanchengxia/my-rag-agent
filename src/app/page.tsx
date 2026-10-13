@@ -5,9 +5,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
 
+type RetrieverResource = {
+  position?: number;
+  dataset_name?: string;
+  document_name?: string;
+  content?: string;
+  score?: number;
+};
+
 type MessageItem = {
   role: "user" | "ai";
   content: string;
+  sources?: RetrieverResource[];
 };
 
 export default function RagAgentPage() {
@@ -53,6 +62,7 @@ export default function RagAgentPage() {
       const decoder = new TextDecoder();
       let buffer = "";
       let aiContent = "";
+      let sources: RetrieverResource[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -70,16 +80,20 @@ export default function RagAgentPage() {
             const json = JSON.parse(line);
             if (json.answer) {
               aiContent += json.answer;
-              setMessages((prev) => {
-                const arr = [...prev];
-                arr[arr.length - 1] = { role: "ai", content: aiContent };
-                return arr;
-              });
+            }
+            // Dify 在 message_end 事件里返回知识库检索到的片段（metadata.retriever_resources）
+            if (json.event === "message_end") {
+              sources = json.metadata?.retriever_resources ?? [];
             }
             // 保存会话 id，用于多轮对话上下文记忆
             if (json.conversation_id && !conversationId) {
               setConversationId(json.conversation_id);
             }
+            setMessages((prev) => {
+              const arr = [...prev];
+              arr[arr.length - 1] = { role: "ai", content: aiContent, sources };
+              return arr;
+            });
           } catch {
             // 忽略无法解析的片段
           }
@@ -116,6 +130,30 @@ export default function RagAgentPage() {
               >
                 {msg.content || (loading && idx === messages.length - 1 ? "思考中……" : "")}
               </div>
+              {msg.role === "ai" && msg.sources && msg.sources.length > 0 && (
+                <details className="mt-2 max-w-[85%]">
+                  <summary className="text-xs text-gray-500 cursor-pointer select-none">
+                    📚 检索到 {msg.sources.length} 个知识库片段
+                  </summary>
+                  <div className="mt-2 space-y-2">
+                    {msg.sources.map((s, i) => (
+                      <div key={i} className="text-xs bg-gray-50 border border-gray-200 rounded-md p-2">
+                        <div className="font-medium text-gray-700 mb-1">
+                          {s.document_name || "未知文档"}
+                          {typeof s.score === "number" && (
+                            <span className="text-gray-400 font-normal ml-1">
+                              ({(s.score * 100).toFixed(0)}%)
+                            </span>
+                          )}
+                        </div>
+                        {s.content && (
+                          <div className="text-gray-500 whitespace-pre-wrap">{s.content}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           ))}
           {errorMsg && (
